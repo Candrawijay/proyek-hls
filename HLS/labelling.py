@@ -2,12 +2,12 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer, util
 import torch
 
-# Cek apakah CUDA tersedia
+# Cek device
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(f"Menggunakan device: {device}")
+print(f"[INFO] Menggunakan device: {device}")
 
-# Load model multilingual
-model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2', device=device)
+# Load model yang ringan dan cepat
+model = SentenceTransformer('distiluse-base-multilingual-cased-v2', device=device)
 
 # Daftar SDGs
 sdg_labels = {
@@ -30,33 +30,37 @@ sdg_labels = {
     17: "Kemitraan untuk Mencapai Tujuan"
 }
 
-# Encode SDG labels
+# Encode label SDGs satu kali
 sdg_texts = list(sdg_labels.values())
 sdg_embeddings = model.encode(sdg_texts, convert_to_tensor=True)
 
-# Baca file Excel
-input_path = "preprocessed_output.csv"
-output_path = "labeled.csv"
+# Baca file CSV
+input_csv = "preprocessed_output.csv"
+output_csv = "labeled_output.csv"
 
-df = pd.read_excel(input_path)
+df = pd.read_csv(input_csv)
 
 # Pastikan kolom 'processed_text' ada
 if 'processed_text' not in df.columns:
-    raise ValueError("Kolom 'processed_text' tidak ditemukan di file Excel!")
+    raise ValueError("Kolom 'processed_text' tidak ditemukan di file CSV!")
 
-# Fungsi klasifikasi berdasarkan similarity
-def classify(text):
-    if pd.isna(text) or len(str(text).strip()) == 0:
-        return "Tidak diklasifikasikan"
-    query_embedding = model.encode(str(text), convert_to_tensor=True)
-    cosine_scores = util.cos_sim(query_embedding, sdg_embeddings)[0]
-    best_match_idx = int(cosine_scores.argmax())
-    return sdg_labels[best_match_idx + 1]
+# Preprocessing teks
+texts = df['processed_text'].fillna('').astype(str).tolist()
+print(f"[INFO] Memulai proses pelabelan terhadap {len(texts)} baris...")
 
-# Proses klasifikasi
-print("Memulai pelabelan otomatis...")
-df['Kategori SDGs'] = df['processed_text'].apply(classify)
+# Encode dalam batch
+text_embeddings = model.encode(texts, convert_to_tensor=True, batch_size=64)
 
-# Simpan hasil ke Excel
-df.to_excel(output_path, index=False)
-print(f"Pelabelan selesai. Hasil disimpan sebagai: {output_path}")
+# Hitung cosine similarity
+cosine_scores = util.cos_sim(text_embeddings, sdg_embeddings)
+
+# Ambil index dengan skor tertinggi
+predicted_indices = torch.argmax(cosine_scores, dim=1).cpu().numpy()
+predicted_labels = [sdg_labels[i + 1] for i in predicted_indices]
+
+# Tambahkan kolom hasil
+df['Kategori SDGs'] = predicted_labels
+
+# Simpan hasil sebagai CSV
+df.to_csv(output_csv, index=False)
+print(f"[INFO] Pelabelan selesai. File hasil disimpan sebagai '{output_csv}'.")
